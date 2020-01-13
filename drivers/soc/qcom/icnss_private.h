@@ -157,7 +157,6 @@ enum icnss_driver_state {
 	ICNSS_REJUVENATE,
 	ICNSS_MODE_ON,
 	ICNSS_BLOCK_SHUTDOWN,
-	ICNSS_PDR,
 };
 
 struct ce_irq_list {
@@ -174,6 +173,17 @@ struct icnss_vreg_info {
 	unsigned long settle_delay;
 	bool required;
 };
+
+/* ASUS_BSP+++ "add for the antenna switch power (LDO16A)" */
+struct antenna_switch_vreg {
+	struct regulator *reg;
+	const char *name;
+	u32 min_v;
+	u32 max_v;
+	u32 load_ua;
+	bool enabled;
+};
+/* ASUS_BSP--- "add for the antenna switch power (LDO16A)" */
 
 struct icnss_clk_info {
 	struct clk *handle;
@@ -299,6 +309,9 @@ struct icnss_priv {
 	struct icnss_driver_ops *ops;
 	struct ce_irq_list ce_irq_list[ICNSS_MAX_IRQ_REGISTRATIONS];
 	struct icnss_vreg_info *vreg_info;
+	/* ASUS_BSP+++ "add for the antenna switch power (LDO16A)" */
+	struct antenna_switch_vreg *vreg_antenna;
+	/* ASUS_BSP--- "add for the antenna switch power (LDO16A)" */
 	struct icnss_clk_info *clk_info;
 	u32 ce_irqs[ICNSS_MAX_IRQ_REGISTRATIONS];
 	phys_addr_t mem_base_pa;
@@ -358,7 +371,6 @@ struct icnss_priv {
 	uint32_t fw_early_crash_irq;
 	struct completion unblock_shutdown;
 	char function_name[WLFW_FUNCTION_NAME_LEN + 1];
-	bool is_ssr;
 };
 
 int icnss_call_driver_uevent(struct icnss_priv *priv,

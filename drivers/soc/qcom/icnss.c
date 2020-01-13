@@ -27,6 +27,7 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
+#include <linux/gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
@@ -50,6 +51,19 @@
 #include <soc/qcom/ramdump.h>
 #include "icnss_private.h"
 #include "icnss_qmi.h"
+
+/* ASUS_BSP+++ for wifi antenna switch */
+#define default_wifi_antenna_switch		"1000"
+static char *do_wifi_antenna_switch = default_wifi_antenna_switch;
+module_param(do_wifi_antenna_switch, charp, 0664);
+MODULE_PARM_DESC(do_wifi_antenna_switch, "Wifi antenna switch flag");
+/* ASUS_BSP--- for wifi antenna switch */
+
+/* ASUS_BSP+++ add for the antenna switch power (LDO13A) */
+static int do_antenna_switch = 1;
+module_param(do_antenna_switch, int, 0664);
+MODULE_PARM_DESC(do_antenna_switch, "Switch VREG_L13A_2P7 flag");
+/* ASUS_BSP--- add for the antenna switch power (LDO13A) */
 
 #define MAX_PROP_SIZE			32
 #define NUM_LOG_PAGES			10
@@ -119,6 +133,10 @@ struct icnss_msa_perm_list_t msa_perm_list[ICNSS_MSA_PERM_MAX] = {
 
 };
 
+/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+static struct antenna_switch_vreg antenna_switch_vreg = {NULL, "vdd-2.7-wifi-antenna", 2700000, 2700000, 0, false};
+/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
+
 static struct icnss_vreg_info icnss_vreg_info[] = {
 	{NULL, "vdd-cx-mx", 752000, 752000, 0, 0, false},
 	{NULL, "vdd-1.8-xo", 1800000, 1800000, 0, 0, false},
@@ -147,6 +165,8 @@ static const char * const icnss_pdr_cause[] = {
 	[ICNSS_ROOT_PD_SHUTDOWN] = "Root PD shutdown",
 	[ICNSS_HOST_ERROR] = "Host error",
 };
+
+#define GPIO_LOOKUP_STATE	"wifi_ant_gpio"
 
 static int icnss_assign_msa_perm(struct icnss_mem_region_info
 				 *mem_region, enum icnss_msa_perm new_perm)
@@ -641,14 +661,145 @@ bool icnss_is_rejuvenate(void)
 }
 EXPORT_SYMBOL(icnss_is_rejuvenate);
 
-bool icnss_is_pdr(void)
+/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+static int antenna_switch_enable_vreg(struct icnss_priv *priv)
 {
-	if (!penv)
-		return false;
-	else
-		return test_bit(ICNSS_PDR, &penv->state);
+	int ret = 0;
+
+	if (!(priv->vreg_antenna) || !(priv->vreg_antenna->reg) || (priv->vreg_antenna->enabled)) {
+		printk("[cnss]: antenna_switch_enable_vreg, (%s) return.\n", priv->vreg_antenna->name);
+		return ret;
+	}
+
+	ret = regulator_set_voltage(priv->vreg_antenna->reg, priv->vreg_antenna->min_v, priv->vreg_antenna->max_v);
+	if (ret) {
+		printk("[cnss]: set voltage fail, %s (min_v:%u, max_v:%u) ret=%d.\n",
+		       priv->vreg_antenna->name, priv->vreg_antenna->min_v, priv->vreg_antenna->max_v, ret);
+		return ret;
+	}
+
+	if (priv->vreg_antenna->load_ua) {
+		ret = regulator_set_load(priv->vreg_antenna->reg, priv->vreg_antenna->load_ua);
+		if (ret < 0) {
+			printk("[cnss]: set load fail, %s load_ua:%u, ret=%d.\n", priv->vreg_antenna->name, priv->vreg_antenna->load_ua, ret);
+			return ret;
+		}
+	}
+
+
+	ret = regulator_enable(priv->vreg_antenna->reg);
+	if (ret) {
+		printk("[cnss]: %s enable fail, ret=%d.\n", priv->vreg_antenna->name, ret);
+		return ret;
+	}
+
+	priv->vreg_antenna->enabled = true;
+	printk("[cnss]: %s enabled.\n", priv->vreg_antenna->name);
+
+	return ret;
 }
-EXPORT_SYMBOL(icnss_is_pdr);
+
+
+static int antenna_switch_disable_vreg(struct icnss_priv *priv)
+{
+	int ret = 0;
+
+	if (!(priv->vreg_antenna) || !(priv->vreg_antenna->reg) || !(priv->vreg_antenna->enabled)) {
+		printk("[cnss]: antenna_switch_disable_vreg, (%s) return.\n", priv->vreg_antenna->name);
+		return ret;
+	}
+
+	ret = regulator_disable(priv->vreg_antenna->reg);
+	if (ret) {
+		printk("[cnss]: %s disable fail, ret=%d.\n", priv->vreg_antenna->name, ret);
+		return ret;
+	}
+
+	ret = regulator_set_load(priv->vreg_antenna->reg, 0);
+	if (ret < 0) {
+		printk("[cnss]: set load 0 fail, %s ret=%d.\n", priv->vreg_antenna->name, ret);
+		return ret;
+	}
+
+	ret = regulator_set_voltage(priv->vreg_antenna->reg, 0, priv->vreg_antenna->max_v);
+	if (ret) {
+		printk("[cnss]: set voltage 0 fail, %s ret=%d.\n", priv->vreg_antenna->name, ret);
+		return ret;
+	}
+
+	priv->vreg_antenna->enabled = false;
+	printk("[cnss]: %s disabled.\n", priv->vreg_antenna->name);
+
+	return ret;
+}
+
+int cnss_setAntennaSwitch(void)
+{
+	int ret = 0;
+
+	if (do_antenna_switch == 1) {
+		printk("[cnss]: cnss_setAntennaSwitch, antenna_switch_enable_vreg.\n");
+		ret = antenna_switch_enable_vreg(penv);
+		if (ret != 0) {
+			printk("[cnss]: cnss_setAntennaSwitch, antenna_switch_enable_vreg failed.\n");
+		}
+	}
+	else {
+		printk("[cnss]: cnss_setAntennaSwitch, antenna_switch_disable_vreg.\n");
+		ret = antenna_switch_disable_vreg(penv);
+		if (ret != 0) {
+			printk("[cnss]: cnss_setAntennaSwitch, antenna_switch_disable_vreg failed.\n");
+		}
+	}
+
+	return do_antenna_switch;
+}
+EXPORT_SYMBOL(cnss_setAntennaSwitch);
+/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
+
+int cnss_setWifiAntenna(void)
+{
+	int antenna_gpio_79 = 0;
+	int antenna_gpio_80 = 0;
+	int antenna_gpio_64 = 0;
+	int antenna_gpio_67 = 0;
+
+        int antenna_temp = 0;
+
+	icnss_pr_info("[cnss]: wifi_antenna_switch_start = %s, GPIO(79/80/64/67) = %d%d%d%d.\n", do_wifi_antenna_switch, gpio_get_value(79),gpio_get_value(80),gpio_get_value(64),gpio_get_value(67));
+
+	if( sscanf(do_wifi_antenna_switch, "%d\n", &antenna_temp) ){
+		icnss_pr_info("[cnss] parsed antenna %d", antenna_temp);
+	}
+
+	if( antenna_temp <= 1111 ) {
+		antenna_gpio_79 = antenna_temp / 1000;
+		gpio_set_value(79, antenna_gpio_79);
+
+		antenna_temp = antenna_temp % 1000;
+		antenna_gpio_80 = antenna_temp / 100;
+		gpio_set_value(80, antenna_gpio_80);
+
+		antenna_temp = antenna_temp % 100;
+		antenna_gpio_64 = antenna_temp / 10;
+		gpio_set_value(64, antenna_gpio_64);
+
+		antenna_gpio_67 = antenna_temp % 10;
+		gpio_set_value(67, antenna_gpio_67);
+	}
+
+	//ASUS_BSP+++ "for /data/log/ASUSEvtlog"
+	ASUSEvtlog("[wlan]: wifi_antenna_switch GPIO(79/80/64/67) = %d%d%d%d.\n", gpio_get_value(79),gpio_get_value(80),gpio_get_value(64),gpio_get_value(67));
+	//ASUS_BSP--- "for /data/log/ASUSEvtlog"
+
+	icnss_pr_info("[cnss]: wifi_antenna_switch_end = %s, GPIO(79/80/64/67) = %d%d%d%d.\n", do_wifi_antenna_switch, gpio_get_value(79),gpio_get_value(80),gpio_get_value(64),gpio_get_value(67));
+
+	return 0;
+
+}
+EXPORT_SYMBOL(cnss_setWifiAntenna);
+
+/* ASUS_BSP--- for for wifi antenna switch*/
 
 int icnss_power_off(struct device *dev)
 {
@@ -962,11 +1113,9 @@ static int icnss_pd_restart_complete(struct icnss_priv *priv)
 
 	icnss_call_driver_shutdown(priv);
 
-	clear_bit(ICNSS_PDR, &priv->state);
 	clear_bit(ICNSS_REJUVENATE, &priv->state);
 	clear_bit(ICNSS_PD_RESTART, &priv->state);
 	priv->early_crash_ind = false;
-	priv->is_ssr = false;
 
 	if (!priv->ops || !priv->ops->reinit)
 		goto out;
@@ -1314,8 +1463,6 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 	if (code != SUBSYS_BEFORE_SHUTDOWN)
 		return NOTIFY_OK;
 
-	priv->is_ssr = true;
-
 	if (code == SUBSYS_BEFORE_SHUTDOWN && !notif->crashed &&
 	    test_bit(ICNSS_BLOCK_SHUTDOWN, &priv->state)) {
 		if (!wait_for_completion_timeout(&priv->unblock_shutdown,
@@ -1440,9 +1587,6 @@ static int icnss_service_notifier_notify(struct notifier_block *nb,
 
 	if (notification != SERVREG_NOTIF_SERVICE_STATE_DOWN_V01)
 		goto done;
-
-	if (!priv->is_ssr)
-		set_bit(ICNSS_PDR, &priv->state);
 
 	event_data = kzalloc(sizeof(*event_data), GFP_KERNEL);
 
@@ -2110,6 +2254,7 @@ int icnss_trigger_recovery(struct device *dev)
 	if (test_bit(ICNSS_PD_RESTART, &priv->state)) {
 		icnss_pr_err("PD recovery already in progress: state: 0x%lx\n",
 			     priv->state);
+		ret = -EPERM;
 		goto out;
 	}
 
@@ -2566,6 +2711,7 @@ static ssize_t icnss_stats_write(struct file *fp, const char __user *buf,
 	return count;
 }
 
+#if 0
 static int icnss_stats_show_state(struct seq_file *s, struct icnss_priv *priv)
 {
 	enum icnss_driver_state i;
@@ -2638,9 +2784,6 @@ static int icnss_stats_show_state(struct seq_file *s, struct icnss_priv *priv)
 			continue;
 		case ICNSS_BLOCK_SHUTDOWN:
 			seq_puts(s, "BLOCK SHUTDOWN");
-			continue;
-		case ICNSS_PDR:
-			seq_puts(s, "PDR TRIGGERED");
 		}
 
 		seq_printf(s, "UNKNOWN-%d", i);
@@ -2722,9 +2865,17 @@ static int icnss_stats_show_irqs(struct seq_file *s, struct icnss_priv *priv)
 
 	return 0;
 }
+#endif
 
 static int icnss_stats_show(struct seq_file *s, void *data)
 {
+
+	cnss_setAntennaSwitch();
+	cnss_setWifiAntenna();
+	return 0;
+
+
+#if 0
 #define ICNSS_STATS_DUMP(_s, _priv, _x) \
 	seq_printf(_s, "%24s: %u\n", #_x, _priv->stats._x)
 
@@ -2786,6 +2937,7 @@ static int icnss_stats_show(struct seq_file *s, void *data)
 
 	return 0;
 #undef ICNSS_STATS_DUMP
+#endif
 }
 
 static int icnss_stats_open(struct inode *inode, struct file *file)
@@ -3014,6 +3166,20 @@ static const struct file_operations icnss_regread_fops = {
 	.llseek         = seq_lseek,
 };
 
+
+/* ASUS_BSP+++ for wlan firmware add debug ini */
+static char do_wlan_fw_adddebugini[256];
+module_param_string(do_wlan_fw_adddebugini,do_wlan_fw_adddebugini, sizeof(do_wlan_fw_adddebugini), S_IWUSR | S_IRUGO);
+MODULE_PARM_DESC(do_wlan_fw_adddebugini, "Is the wlan fw debug ini");
+
+char * wcnss_get_fw_adddebugini(void)
+{
+       pr_info("[wcnss]: do_wlan_fw_adddebugini=%s.\n", do_wlan_fw_adddebugini);
+       return do_wlan_fw_adddebugini;
+}
+EXPORT_SYMBOL(wcnss_get_fw_adddebugini);
+/* ASUS_BSP--- for wlan firmware add debug ini  */
+
 #ifdef CONFIG_ICNSS_DEBUG
 static int icnss_debugfs_create(struct icnss_priv *priv)
 {
@@ -3080,6 +3246,14 @@ static int icnss_probe(struct platform_device *pdev)
 	const __be32 *addrp;
 	u64 prop_size = 0;
 	struct device_node *np;
+	/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+	struct regulator *temp_reg;
+	int rc = 0;
+	/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
+
+	struct pinctrl *key_pinctrl;
+	struct pinctrl_state *set_state;
+
 
 	if (penv) {
 		icnss_pr_err("Driver is already initialized\n");
@@ -3096,6 +3270,18 @@ static int icnss_probe(struct platform_device *pdev)
 	dev_set_drvdata(dev, priv);
 
 	priv->pdev = pdev;
+
+	/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+	priv->vreg_antenna = &antenna_switch_vreg;
+	temp_reg = devm_regulator_get(dev, priv->vreg_antenna->name);
+	if (IS_ERR_OR_NULL(temp_reg)) {
+		rc = PTR_ERR(temp_reg);
+		printk("[cnss]: failed to get %s, rc=%d.\n", priv->vreg_antenna->name, rc);
+		goto out;
+	}
+	priv->vreg_antenna->reg = temp_reg;
+	printk("[cnss]: %s init ok.\n", priv->vreg_antenna->name);
+	/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
 
 	priv->vreg_info = icnss_vreg_info;
 
@@ -3233,6 +3419,94 @@ static int icnss_probe(struct platform_device *pdev)
 		}
 	}
 
+	key_pinctrl = devm_pinctrl_get(dev);
+	if (IS_ERR_OR_NULL(key_pinctrl)) {
+		icnss_pr_err("[cnss] set_pinctrl failed");
+	}
+
+	set_state = pinctrl_lookup_state(key_pinctrl, GPIO_LOOKUP_STATE);
+	ret = pinctrl_select_state(key_pinctrl, set_state);
+	if(ret < 0)
+		icnss_pr_err("[cnss] pinctrl_select_state");
+
+	/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+	ret = antenna_switch_enable_vreg(priv);
+	if (ret != 0) {
+		printk("[cnss]: icnss_probe, antenna_switch_enable_vreg ret=%d.\n", ret);
+	}
+	/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
+
+#if 1
+	printk("[cnss] gpio_get_value_79 %d\n", gpio_get_value(79));
+	printk("[cnss] gpio_get_value_80 %d\n", gpio_get_value(80));
+	printk("[cnss] gpio_get_value_64 %d\n", gpio_get_value(64));
+	printk("[cnss] gpio_get_value_67 %d\n", gpio_get_value(67));
+
+	if (gpio_is_valid (79)) {
+		ret = gpio_request(79, "wlan-asus_ant_79");
+		if (ret){
+			printk("[cnss] gpio_request_79.err %d\n", ret);
+		}
+		ret = gpio_direction_output(79, 1);
+		if (ret){
+			printk("[cnss] gpio_direction_output_79.err %d\n", ret);
+		}
+		gpio_set_value(79, 1);
+		printk("[cnss] gpio_get_value_79_end %d\n", gpio_get_value(79));
+	}
+	else {
+		printk("[cnss] gpio_79 is not valid");
+	}
+
+	if (gpio_is_valid (80)) {
+		ret = gpio_request(80, "wlan-asus_ant_80");
+		if (ret){
+			printk("[cnss] gpio_request_80.err %d\n", ret);
+		}
+		ret = gpio_direction_output(80, 0);
+		if (ret){
+			printk("[cnss] gpio_direction_output_80.err %d\n", ret);
+		}
+		gpio_set_value(80, 0);
+		printk("[cnss] gpio_get_value_80_end %d\n", gpio_get_value(80));
+	}
+	else {
+		printk("[cnss] gpio_80 is not valid");
+	}
+
+	if (gpio_is_valid (64)) {
+		ret = gpio_request(64, "wlan-asus_ant_64");
+		if (ret){
+			printk("[cnss] gpio_request_64.err %d\n", ret);
+		}
+		ret = gpio_direction_output(64, 0);
+		if (ret){
+			printk("[cnss] gpio_direction_output_80.err %d\n", ret);
+		}
+		gpio_set_value(64, 0);
+		printk("[cnss] gpio_get_value_64_end %d\n", gpio_get_value(64));
+	}
+	else {
+		printk("[cnss] gpio_64 is not valid");
+	}
+
+	if (gpio_is_valid (67)) {
+		ret = gpio_request(67, "wlan-asus_ant_67");
+		if (ret){
+			printk("[cnss] gpio_request_67.err %d\n", ret);
+		}
+		ret = gpio_direction_output(67, 0);
+		if (ret){
+			printk("[cnss] gpio_direction_output_67.err %d\n", ret);
+		}
+		gpio_set_value(67, 0);
+		printk("[cnss] gpio_get_value_67_end %d\n", gpio_get_value(67));
+	}
+	else {
+		printk("[cnss] gpio_67 is not valid");
+	}
+#endif
+
 	spin_lock_init(&priv->event_lock);
 	spin_lock_init(&priv->on_off_lock);
 	mutex_init(&priv->dev_lock);
@@ -3306,6 +3580,10 @@ static int icnss_remove(struct platform_device *pdev)
 	clear_bit(ICNSS_MSA0_ASSIGNED, &penv->state);
 
 	dev_set_drvdata(&pdev->dev, NULL);
+
+	/* ASUS_BSP+++ "add for the antenna switch power (LDO13A)" */
+//	antenna_switch_disable_vreg(penv);
+	/* ASUS_BSP--- "add for the antenna switch power (LDO13A)" */
 
 	return 0;
 }
