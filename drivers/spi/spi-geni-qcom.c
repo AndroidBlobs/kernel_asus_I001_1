@@ -1369,6 +1369,7 @@ static irqreturn_t geni_spi_irq(int irq, void *data)
 
 		if ((m_irq & M_CMD_DONE_EN) || (m_irq & M_CMD_CANCEL_EN) ||
 			(m_irq & M_CMD_ABORT_EN)) {
+			//complete(&mas->xfer_done);
 			mas->cmd_done = true;
 			/*
 			 * If this happens, then a CMD_DONE came before all the
@@ -1535,7 +1536,8 @@ static int spi_geni_probe(struct platform_device *pdev)
 		ret = -ENXIO;
 		goto spi_geni_probe_err;
 	}
-
+	dev_info(&pdev->dev, "Max frequency %lu", spi->max_speed_hz);
+	
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "se_phys");
 	if (!res) {
 		ret = -ENXIO;

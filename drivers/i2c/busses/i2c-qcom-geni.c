@@ -156,8 +156,9 @@ struct geni_i2c_clk_fld {
 
 static struct geni_i2c_clk_fld geni_i2c_clk_map[] = {
 	{KHz(100), 7, 10, 11, 26},
-	{KHz(400), 2,  5, 12, 24},
-	{KHz(1000), 1, 3,  9, 18},
+	{KHz(400), 2,  3, 10, 22},
+	{KHz(900), 1,  2, 5, 15},
+	{KHz(1000), 1, 2,  7, 15},
 };
 
 static int geni_i2c_clk_map_idx(struct geni_i2c_dev *gi2c)
@@ -893,7 +894,12 @@ static int geni_i2c_probe(struct platform_device *pdev)
 			"Bus frequency not specified, default to 400KHz.\n");
 		gi2c->i2c_rsc.clk_freq_out = KHz(400);
 	}
-
+	//ASUS_BSP_Vibrator +++: debug i2c bus clock setting
+	else{
+		dev_info(&pdev->dev,
+			"Bus frequency is specified %dHz.\n", gi2c->i2c_rsc.clk_freq_out);
+	}
+	//ASUS_BSP_Vibrator ---
 	gi2c->irq = platform_get_irq(pdev, 0);
 	if (gi2c->irq < 0) {
 		dev_err(gi2c->dev, "IRQ error for i2c-geni\n");

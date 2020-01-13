@@ -340,6 +340,21 @@ static int gic_suspend(void)
 	return 0;
 }
 
+//ASUS_BSP +++ Johnny yujoe [Qcom][PS][][ADD]Print first IP address log when IRQ 484
+static int rmnet_irq_flag_rx = 0;
+int rmnet_irq_flag_function_rx(void)
+{
+    if( rmnet_irq_flag_rx == 1 ) {
+        rmnet_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(rmnet_irq_flag_function_rx);
+
+//ASUS_BSP --- Johnny[Qcom][PS][][ADD]Print first IP address log when IRQ 484
+
 static void gic_show_resume_irq(struct gic_chip_data *gic)
 {
 	unsigned int i;
@@ -369,6 +384,13 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 			name = desc->action->name;
 
 		pr_warn("%s: %d triggered %s\n", __func__, irq, name);
+                //ASUS_BSP +++ Johnny yujoe [Qcom][PS][][ADD]Print first IP address log when IRQ 57
+                //printk("%s: [data] yujoe test i = %d \n", __func__,i);
+                if(i == 343){
+                    rmnet_irq_flag_rx = 1;
+                    //printk("%s: [data] Johnny 57 \n", __func__);
+                }
+                //ASUS_BSP --- Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 57
 	}
 }
 

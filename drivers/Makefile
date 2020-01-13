@@ -188,3 +188,38 @@ obj-$(CONFIG_TEE)		+= tee/
 obj-$(CONFIG_MULTIPLEXER)	+= mux/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 obj-$(CONFIG_ESOC)              += esoc/
+
+# ASUS_BSP Deeo : AURA SYNC driver
+obj-y				+= aura_sync/
+
+# BSP Lotta_Lu +++ EC Driver
+obj-y				+= ec_hid_driver/
+# BSP Lotta_Lu --- EC Driver
+
+# BSP Lotta_Lu +++ GamePad Driver
+obj-y				+= gamepad_hid_driver/
+# BSP Lotta_Lu --- GamePad Driver
+
+# ASUS_BSP Bevis +++ dt_power Driver
+obj-y				+= dt_power/
+# ASUS_BSP Bevis --- dt_power Driver
+
+# ASUS_SZ_BSP Cassie: fan driver for dt+++
+obj-y               +=fan/
+# ASUS_SZ_BSP Cassie: fan driver for dt+++
+# ASUS_SZ_BSP Cassie: aura sync driver for dt+++
+obj-y               +=dt_aura/
+# ASUS_SZ_BSP Cassie: aura sync driver for dt---
+
+#Texura
+ifdef CONFIG_TEXURA_USERDEBUG
+	obj-y				+= ntfs/userdebug/
+	obj-y				+= exfat/userdebug/
+else
+	obj-y				+= ntfs/user/
+	obj-y				+= exfat/user/
+endif
+
+#ASUS_BSP Vibrator +++
+obj-$(CONFIG_TSPDRV) += motor/tspdrv/
+#ASUS_BSP Vibrator ---
