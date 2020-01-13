@@ -30,9 +30,14 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/spinlock.h>
+#include <linux/input/qpnp-power-on.h>
+
+bool volume_key_wake_en = 0; /* /sys/module/gpio_keys/parameters/volume_key_wake_en, default is N */
+module_param(volume_key_wake_en, bool, 0644);
+MODULE_PARM_DESC(volume_key_wake_en, "Enable/Disable volume key wakeup");
 
 struct gpio_button_data {
-	const struct gpio_keys_button *button;
+	struct gpio_keys_button *button; //Remove const for DEVICE_ATTR(enabled_wakeup/disabled_wakeup)
 	struct input_dev *input;
 	struct gpio_desc *gpiod;
 
@@ -345,11 +350,65 @@ static DEVICE_ATTR(disabled_switches, S_IWUSR | S_IRUGO,
 		   gpio_keys_show_disabled_switches,
 		   gpio_keys_store_disabled_switches);
 
+// ASUS BSP +++ KEY
+/*
+* echo keycode(114/115) > /sys/devices/platform/soc/soc:gpio_keys_asus/enabled_wakeup
+* echo keycode > /sys/devices/platform/soc/soc:gpio_keys_asus/disabled_wakeup
+*/
+static ssize_t gpio_keys_wakeup_enable(struct device *dev,
+				struct device_attribute *attr, const char *buf,
+						size_t size, int enable_wakeup)
+{
+		int i, ret = -EINVAL;
+		long code;
+		struct gpio_keys_drvdata *ddata = dev_get_drvdata(dev);
+
+		ret = kstrtol(buf, 10, &code);
+		if (ret != 0) {
+
+			dev_err(dev, "Invalid input.\n");
+			return ret;
+		}
+		for (i = 0; i < ddata->pdata->nbuttons; i++) {
+			struct gpio_button_data *bdata = &ddata->data[i];
+			if ((int)code == bdata->button->code) {
+				printk("[Gpio_keys] volkey wakeup keycode:%d\n", (int)code);
+				bdata->button->wakeup = enable_wakeup;
+				device_init_wakeup(dev, bdata->button->wakeup);
+				break;
+				}
+		}
+		return size;
+}
+
+static ssize_t gpio_keys_store_enabled_wakeup(struct device *dev,
+				struct device_attribute *attr, const char *buf, size_t size)
+{
+				printk("[Gpio_keys] set volkey wakeup:True\n");
+		return gpio_keys_wakeup_enable(dev, attr, buf, size, 1);
+}
+
+static ssize_t gpio_keys_store_disabled_wakeup(struct device *dev,
+				struct device_attribute *attr, const char *buf, size_t size)
+{
+				printk("[Gpio_keys] set volkey wakeup:False\n");
+		return gpio_keys_wakeup_enable(dev, attr, buf, size, 0);
+}
+static DEVICE_ATTR(enabled_wakeup, S_IWUSR | S_IRUGO,
+						NULL,
+						gpio_keys_store_enabled_wakeup);
+static DEVICE_ATTR(disabled_wakeup, S_IWUSR | S_IRUGO,
+						NULL,
+						gpio_keys_store_disabled_wakeup);
+// ASUS BSP --- KEY
+
 static struct attribute *gpio_keys_attrs[] = {
 	&dev_attr_keys.attr,
 	&dev_attr_switches.attr,
 	&dev_attr_disabled_keys.attr,
 	&dev_attr_disabled_switches.attr,
+        &dev_attr_enabled_wakeup.attr,		 // ASUS BSP +++ KEY
+	&dev_attr_disabled_wakeup.attr,	         // ASUS BSP +++ KEY
 	NULL,
 };
 
@@ -357,6 +416,7 @@ static const struct attribute_group gpio_keys_attr_group = {
 	.attrs = gpio_keys_attrs,
 };
 
+unsigned int b_press = 0; //ASUS_BSP : Wei_Lai
 static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 {
 	const struct gpio_keys_button *button = bdata->button;
@@ -371,11 +431,35 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 		return;
 	}
 
+	printk("[Keys][gpio_keys.c] keycode=%d, state=%s\n", button->code, state?"press":"release");
+
 	if (type == EV_ABS) {
 		if (state)
 			input_event(input, type, button->code, button->value);
 	} else {
 		input_event(input, type, *bdata->code, state);
+               if(state) {
+
+	              // ASUS BSP +++ KEY : Use wakelock to extend input sysnc time.
+		      if ((button->code == KEY_VOLUMEUP) || (button->code == KEY_VOLUMEDOWN)) {
+				//printk("[Gpio_keys]vol_key:%x,pm sts:%x,\r\n", state, g_bResume);
+				//wake_lock_timeout(&vol_key_wake_lock, msecs_to_jiffies(3000));
+				//printk("[Gpio_keys]Wakelock 3 sec for vol_key \n");
+	              // ASUS BSP --- KEY : Use wakelock to extend input sysnc time.
+		      }
+
+                      if(button->code == 114)
+                              b_press |= 0x01;
+
+                      if(button->code == 115)
+                              b_press |= 0x02;
+               }else {
+                       if(button->code == 114)
+                              b_press &= ~(0x01);
+
+                       if(button->code == 115)
+                              b_press &= ~(0x02);
+               }
 	}
 	input_sync(input);
 }
@@ -481,7 +565,7 @@ static void gpio_keys_quiesce_key(void *data)
 static int gpio_keys_setup_key(struct platform_device *pdev,
 				struct input_dev *input,
 				struct gpio_keys_drvdata *ddata,
-				const struct gpio_keys_button *button,
+				struct gpio_keys_button *button, //Remove const for DEVICE_ATTR(enabled_wakeup/disabled_wakeup)
 				int idx,
 				struct fwnode_handle *child)
 {
@@ -622,6 +706,8 @@ static int gpio_keys_setup_key(struct platform_device *pdev,
 	return 0;
 }
 
+// ASUS_BSP +++ KEY
+/*
 static void gpio_keys_report_state(struct gpio_keys_drvdata *ddata)
 {
 	struct input_dev *input = ddata->input;
@@ -634,6 +720,7 @@ static void gpio_keys_report_state(struct gpio_keys_drvdata *ddata)
 	}
 	input_sync(input);
 }
+*/
 
 static int gpio_keys_open(struct input_dev *input)
 {
@@ -648,7 +735,7 @@ static int gpio_keys_open(struct input_dev *input)
 	}
 
 	/* Report current state of buttons that are connected to GPIOs */
-	gpio_keys_report_state(ddata);
+	// gpio_keys_report_state(ddata); // Dont need report key
 
 	return 0;
 }
@@ -749,6 +836,8 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	int i, error;
 	int wakeup = 0;
 
+        printk("[Keys][gpio_keys.c] gpio_keys_probe() +++\n");
+
 	if (!pdata) {
 		pdata = gpio_keys_get_devtree_pdata(dev);
 		if (IS_ERR(pdata))
@@ -802,7 +891,7 @@ static int gpio_keys_probe(struct platform_device *pdev)
 		__set_bit(EV_REP, input->evbit);
 
 	for (i = 0; i < pdata->nbuttons; i++) {
-		const struct gpio_keys_button *button = &pdata->buttons[i];
+		struct gpio_keys_button *button = &pdata->buttons[i]; //Remove const for DEVICE_ATTR(enabled_wakeup/disabled_wakeup)
 
 		if (!dev_get_platdata(dev)) {
 			child = device_get_next_child_node(dev, child);
@@ -843,6 +932,10 @@ static int gpio_keys_probe(struct platform_device *pdev)
 
 	device_init_wakeup(dev, wakeup);
 
+	/*wake_lock_init(&vol_key_wake_lock, WAKE_LOCK_SUSPEND, "vol_key_lock");*/
+
+	printk("[Keys][gpio_keys.c] gpio_keys_probe() ---\n");
+
 	return 0;
 }
 
@@ -855,8 +948,16 @@ static int __maybe_unused gpio_keys_suspend(struct device *dev)
 	if (device_may_wakeup(dev)) {
 		for (i = 0; i < ddata->pdata->nbuttons; i++) {
 			struct gpio_button_data *bdata = &ddata->data[i];
-			if (bdata->button->wakeup)
+
+			if (bdata->button->wakeup && bdata->button->code != 115)
+			{
 				enable_irq_wake(bdata->irq);
+			}
+			else if(volume_key_wake_en && bdata->button->code == 115)
+			{
+				enable_irq_wake(bdata->irq);
+				asus_enable_resin_irq_wake(1);
+			}
 			bdata->suspended = true;
 		}
 	} else {
@@ -879,8 +980,16 @@ static int __maybe_unused gpio_keys_resume(struct device *dev)
 	if (device_may_wakeup(dev)) {
 		for (i = 0; i < ddata->pdata->nbuttons; i++) {
 			struct gpio_button_data *bdata = &ddata->data[i];
-			if (bdata->button->wakeup)
+
+			if (bdata->button->wakeup  && bdata->button->code != 115)
+			{
 				disable_irq_wake(bdata->irq);
+			}
+			else if(volume_key_wake_en && bdata->button->code == 115)
+			{
+				disable_irq_wake(bdata->irq);
+				asus_enable_resin_irq_wake(0);
+			}
 			bdata->suspended = false;
 		}
 	} else {
@@ -893,17 +1002,69 @@ static int __maybe_unused gpio_keys_resume(struct device *dev)
 	if (error)
 		return error;
 
-	gpio_keys_report_state(ddata);
+	// gpio_keys_report_state(ddata); //Dont need report key during resume
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(gpio_keys_pm_ops, gpio_keys_suspend, gpio_keys_resume);
+// ASUS_BSP +++ KEY
+
+#ifdef CONFIG_PM_SLEEP
+static int gpio_keys_suspend_noirq(struct device *dev)
+{
+
+	//g_bResume = 0;
+	printk("[Gpio_keys]gpio_keys_suspend_noirq\n");
+
+	return 0;
+}
+
+static int gpio_keys_resume_noirq(struct device *dev)
+{
+	//struct gpio_keys_drvdata *ddata = dev_get_drvdata(dev);
+
+	//ddata->force_trigger = 1;
+	//g_bResume = 1;
+	printk("[Gpio_keys]gpio_keys_resume_noirq\n");
+
+	return 0;
+}
+
+#else
+
+static int gpio_keys_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int gpio_keys_resume(struct device *dev)
+{
+	return 0;
+}
+
+#endif
+
+// ASUS_BSP --- KEY
+
+// static SIMPLE_DEV_PM_OPS(gpio_keys_pm_ops, gpio_keys_suspend, gpio_keys_resume);
+
+// ASUS_BSP +++ KEY
+
+static const struct dev_pm_ops gpio_keys_pm_ops = {
+	.suspend	= gpio_keys_suspend,
+	.resume		= gpio_keys_resume,
+	.suspend_noirq  = gpio_keys_suspend_noirq,
+	.resume_noirq   = gpio_keys_resume_noirq,
+};
+
+// ASUS_BSP --- KEY
 
 static struct platform_driver gpio_keys_device_driver = {
 	.probe		= gpio_keys_probe,
 	.driver		= {
 		.name	= "gpio-keys",
+#ifdef CONFIG_PM_SLEEP
 		.pm	= &gpio_keys_pm_ops,
+#endif
 		.of_match_table = gpio_keys_of_match,
 	}
 };
