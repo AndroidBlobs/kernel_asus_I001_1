@@ -4440,6 +4440,11 @@ static int fts_probe(struct i2c_client *client,
 	int skip_5_1 = 0;
 	struct device_node *dt = client->dev.of_node;
 
+	if (g_ASUS_hwID >= ZS660KL_ER1) {
+	  printk("fts.c NOT FTS touch cancel probe");
+	  return -1;
+	}
+	
 	logError(0, "%s %s: driver probe begin!\n", tag, __func__);
 
 	logError(0, "%s SET I2C Functionality and Dev INFO:\n", tag);
