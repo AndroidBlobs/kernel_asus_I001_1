@@ -11,7 +11,6 @@ config USB_OHCI_BIG_ENDIAN_MMIO
 config USB_OHCI_LITTLE_ENDIAN
 	bool
 	default n if STB03xxx || PPC_MPC52xx
-	default y
 
 config USB_EHCI_BIG_ENDIAN_MMIO
 	bool
@@ -173,6 +172,8 @@ source "drivers/usb/gadget/Kconfig"
 source "drivers/usb/typec/Kconfig"
 
 source "drivers/usb/pd/Kconfig"
+
+source "drivers/usb/pd_rt1715/Kconfig"
 
 config USB_LED_TRIG
 	bool "USB LED Triggers"

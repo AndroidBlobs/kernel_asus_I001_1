@@ -451,6 +451,12 @@ static void qusb_phy_host_init(struct usb_phy *phy)
 	/* Ensure above write is completed before turning ON ref clk */
 	wmb();
 
+	for (p_index = 0; p_index < 5; p_index++) {
+		printk("QUSB2PHY_PORT_TUNE%d = 0x%02x", p_index + 1,
+				(u8)readl_relaxed(qphy->base +
+					qphy->phy_reg[PORT_TUNE1] + (4 * p_index)));
+	}
+
 	/* Require to get phy pll lock successfully */
 	usleep_range(150, 160);
 
@@ -472,6 +478,7 @@ static int qusb_phy_init(struct usb_phy *phy)
 	ret = qusb_phy_enable_power(qphy, true);
 	if (ret)
 		return ret;
+	qphy->dpdm_enable = true;
 
 	qusb_phy_reset(qphy);
 
@@ -551,6 +558,12 @@ static int qusb_phy_init(struct usb_phy *phy)
 	/* Ensure above write is completed before turning ON ref clk */
 	wmb();
 
+	for (p_index = 0; p_index < 5; p_index++) {
+		printk("QUSB2PHY_PORT_TUNE%d = 0x%02x", p_index + 1,
+				(u8)readl_relaxed(qphy->base +
+					qphy->phy_reg[PORT_TUNE1] + (4 * p_index)));
+	}
+
 	/* Require to get phy pll lock successfully */
 	usleep_range(150, 160);
 
@@ -566,10 +579,12 @@ static int qusb_phy_init(struct usb_phy *phy)
 static void qusb_phy_shutdown(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-
+	int ret = 0;
 	dev_dbg(phy->dev, "%s\n", __func__);
 
-	qusb_phy_enable_power(qphy, false);
+	ret = qusb_phy_enable_power(qphy, false);
+	if (!ret)
+		qphy->dpdm_enable = false;
 
 }
 
@@ -597,6 +612,7 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
 	u32 linestate = 0, intr_mask = 0;
+	int ret = 0;
 
 	if (qphy->suspended == suspend) {
 		dev_dbg(phy->dev, "%s: USB PHY is already suspended\n",
@@ -653,7 +669,9 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 				qphy->base + qphy->phy_reg[INTR_CTRL]);
 			qusb_phy_reset(qphy);
 			qusb_phy_enable_clocks(qphy, false);
-			qusb_phy_enable_power(qphy, false);
+			ret = qusb_phy_enable_power(qphy, false);
+			if(!ret)
+				qphy->dpdm_enable = false;
 		}
 		qphy->suspended = true;
 	} else {
@@ -1135,6 +1153,7 @@ static int qusb_phy_probe(struct platform_device *pdev)
 static int qusb_phy_remove(struct platform_device *pdev)
 {
 	struct qusb_phy *qphy = platform_get_drvdata(pdev);
+	int ret = 0;
 
 	usb_remove_phy(&qphy->phy);
 	qphy->cable_connected = false;
