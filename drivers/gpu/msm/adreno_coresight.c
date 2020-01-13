@@ -414,7 +414,7 @@ void adreno_coresight_remove(struct adreno_device *adreno_dev)
 }
 
 int adreno_coresight_init(struct adreno_device *adreno_dev)
-{
+{    
 	int ret = 0;
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -450,6 +450,7 @@ int adreno_coresight_init(struct adreno_device *adreno_dev)
 			return -EINVAL;
 		i++;
 	}
+    return ret;
 
-	return ret;
+	
 }
