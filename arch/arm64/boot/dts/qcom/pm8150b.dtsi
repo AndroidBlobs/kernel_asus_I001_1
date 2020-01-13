@@ -379,6 +379,7 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 			qcom,pmic-revid = <&pm8150b_revid>;
+			qcom,cl-wt-enable;
 			status = "okay";
 
 			qcom,fg-batt-soc@4000 {
@@ -618,7 +619,7 @@
 
 		trips {
 			ibat_lvl1:ibat-lvl1 {
-				temperature = <5000>;
+				temperature = <5800>;
 				hysteresis = <200>;
 				type = "passive";
 			};
@@ -686,7 +687,7 @@
 
 		trips {
 			soc_trip:soc-trip {
-				temperature = <10>;
+				temperature = <3>;
 				hysteresis = <0>;
 				type = "passive";
 			};

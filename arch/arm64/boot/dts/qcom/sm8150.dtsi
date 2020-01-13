@@ -782,6 +782,11 @@
 			size = <0x0 0x2800000>;
 			linux,cma-default;
 		};
+		asus_debug_mem: asus_debug_resion@0{
+			compatible = "removed-dma-poll";
+			no-map;
+			reg = <0x0 0xA0000000 0x0 0x00300000>;
+		};
 	};
 
 	vendor: vendor {
@@ -2611,6 +2616,7 @@
 				  <WAKE_TCS    1>,
 				  <ACTIVE_TCS  2>,
 				  <CONTROL_TCS 0>;
+				  status = "disabled";
 	};
 
 	apcs_glb: mailbox@17c00000 {
@@ -2993,7 +2999,7 @@
 
 	qcom_seecom: qseecom@87900000 {
 		compatible = "qcom,qseecom";
-		reg = <0x87900000 0x2200000>;
+		reg = <0x87900000 0x3E00000>;
 		reg-names = "secapp-region";
 		memory-region = <&qseecom_mem>;
 		qcom,hlos-num-ce-hw-instances = <1>;
@@ -3010,7 +3016,7 @@
 
 	qcom_smcinvoke: smcinvoke@87900000 {
 		compatible = "qcom,smcinvoke";
-		reg = <0x87900000 0x2200000>;
+		reg = <0x87900000 0x3E00000>;
 		reg-names = "secapp-region";
 	};
 
@@ -3553,7 +3559,7 @@
 
 	qcom,rmtfs_sharedmem@0 {
 		compatible = "qcom,sharedmem-uio";
-		reg = <0x0 0x200000>;
+		reg = <0x0 0x300000>;
 		reg-names = "rmtfs";
 		qcom,client-id = <0x00000001>;
 		qcom,guard-memory;
@@ -3791,6 +3797,10 @@
 		      <0xa0000000 0x10000000>,
 		      <0xb0000000 0x10000>;
 		reg-names = "membase", "smmu_iova_base", "smmu_iova_ipa";
+		wlan-asus_ant_80 = <&tlmm 80 0>;
+		wlan-asus_ant_79 = <&tlmm 79 0>;
+		wlan-asus_ant_67 = <&tlmm 67 0>;
+		wlan-asus_ant_64 = <&tlmm 64 0>;
 		iommus = <&apps_smmu 0x0640 0x1>;
 		interrupts = <0 414 0 /* CE0 */ >,
 			     <0 415 0 /* CE1 */ >,
@@ -3844,7 +3854,7 @@
 		qcom,smmu-fast-map;
 		qcom,smmu-coherent;
 		qcom,keep-radio-on-during-sleep;
-		status = "disabled";
+		status = "ok";
 	};
 
 	tspp: msm_tspp@0x8880000 {

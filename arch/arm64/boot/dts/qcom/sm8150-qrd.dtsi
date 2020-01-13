@@ -111,6 +111,7 @@
 		st,regulator_dvdd = "vdd";
 		st,regulator_avdd = "avdd";
 	};
+
 };
 
 &qupv3_se9_i2c {

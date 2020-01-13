@@ -220,7 +220,6 @@
 			status = "ok";
 		};
 	};
-
 	cam_cci1: qcom,cci@ac4b000 {
 		cell-index = <1>;
 		compatible = "qcom,cci";
@@ -315,7 +314,6 @@
 			status = "ok";
 		};
 	};
-
 	qcom,cam_smmu {
 		compatible = "qcom,msm-cam-smmu";
 		status = "ok";
