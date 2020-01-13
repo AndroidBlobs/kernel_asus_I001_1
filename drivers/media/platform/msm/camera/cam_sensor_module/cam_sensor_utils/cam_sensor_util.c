@@ -20,6 +20,9 @@
 
 #define VALIDATE_VOLTAGE(min, max, config_val) ((config_val) && \
 	(config_val >= min) && (config_val <= max))
+	
+//#undef CAM_DBG
+//#define CAM_DBG CAM_ERR
 
 static struct i2c_settings_list*
 	cam_sensor_get_i2c_ptr(struct i2c_settings_array *i2c_reg_settings,
@@ -28,19 +31,22 @@ static struct i2c_settings_list*
 	struct i2c_settings_list *tmp;
 
 	tmp = (struct i2c_settings_list *)
-		kzalloc(sizeof(struct i2c_settings_list), GFP_KERNEL);
+		kvzalloc(sizeof(struct i2c_settings_list), GFP_KERNEL);
 
 	if (tmp != NULL)
 		list_add_tail(&(tmp->list),
 			&(i2c_reg_settings->list_head));
-	else
+	else {
+		CAM_ERR(CAM_SENSOR, "FATAL:: i2c ptr allocate failed");
 		return NULL;
-
+	}
 	tmp->i2c_settings.reg_setting = (struct cam_sensor_i2c_reg_array *)
-		vzalloc(size * sizeof(struct cam_sensor_i2c_reg_array));
+		kvzalloc(size * sizeof(struct cam_sensor_i2c_reg_array),
+			GFP_KERNEL);
 	if (tmp->i2c_settings.reg_setting == NULL) {
 		list_del(&(tmp->list));
-		kfree(tmp);
+		kvfree(tmp);
+		CAM_ERR(CAM_SENSOR, "FATAL:: i2c reg_setting allocate failed");
 		return NULL;
 	}
 	tmp->i2c_settings.size = size;
@@ -60,9 +66,9 @@ int32_t delete_request(struct i2c_settings_array *i2c_array)
 
 	list_for_each_entry_safe(i2c_list, i2c_next,
 		&(i2c_array->list_head), list) {
-		vfree(i2c_list->i2c_settings.reg_setting);
+		kvfree(i2c_list->i2c_settings.reg_setting);
 		list_del(&(i2c_list->list));
-		kfree(i2c_list);
+		kvfree(i2c_list);
 	}
 	INIT_LIST_HEAD(&(i2c_array->list_head));
 	i2c_array->is_settings_valid = 0;
@@ -1594,7 +1600,7 @@ int cam_sensor_core_power_up(struct cam_sensor_power_ctrl_t *ctrl,
 	CAM_DBG(CAM_SENSOR, "power setting size: %d", ctrl->power_setting_size);
 
 	for (index = 0; index < ctrl->power_setting_size; index++) {
-		CAM_DBG(CAM_SENSOR, "index: %d", index);
+		CAM_DBG(CAM_SENSOR, "index: %d name=%s ", index,soc_info->dev_name);
 		power_setting = &ctrl->power_setting[index];
 		if (!power_setting) {
 			CAM_ERR(CAM_SENSOR,
@@ -1713,7 +1719,7 @@ int cam_sensor_core_power_up(struct cam_sensor_power_ctrl_t *ctrl,
 				goto power_up_failed;
 			}
 			if (power_setting->seq_val < num_vreg) {
-				CAM_DBG(CAM_SENSOR, "Enable Regulator");
+				CAM_DBG(CAM_SENSOR, "Enable Regulator %s",soc_info->rgltr_name[power_setting->seq_val]);
 				vreg_idx = power_setting->seq_val;
 
 				soc_info->rgltr[vreg_idx] =
@@ -1766,6 +1772,7 @@ int cam_sensor_core_power_up(struct cam_sensor_power_ctrl_t *ctrl,
 				power_setting->seq_type);
 			break;
 		}
+		
 		if (power_setting->delay > 20)
 			msleep(power_setting->delay);
 		else if (power_setting->delay)

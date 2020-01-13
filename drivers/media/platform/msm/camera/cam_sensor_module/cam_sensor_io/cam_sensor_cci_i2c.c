@@ -42,7 +42,7 @@ int32_t cam_cci_i2c_read(struct cam_sensor_cci_client *cci_client,
 		CAM_ERR(CAM_SENSOR, "rc = %d", rc);
 		return rc;
 	}
-
+	
 	rc = cci_ctrl.status;
 	if (data_type == CAMERA_SENSOR_I2C_TYPE_BYTE)
 		*data = buf[0];
@@ -124,6 +124,7 @@ static int32_t cam_cci_i2c_write_table_cmd(
 	cci_ctrl.cfg.cci_i2c_write_cfg.data_type = write_setting->data_type;
 	cci_ctrl.cfg.cci_i2c_write_cfg.addr_type = write_setting->addr_type;
 	cci_ctrl.cfg.cci_i2c_write_cfg.size = write_setting->size;
+	
 	rc = v4l2_subdev_call(client->cci_client->cci_subdev,
 		core, ioctl, VIDIOC_MSM_CCI_CFG, &cci_ctrl);
 	if (rc < 0) {

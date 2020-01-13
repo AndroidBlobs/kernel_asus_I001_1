@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,10 +16,16 @@
 #include "cam_sensor_util.h"
 #include "cam_soc_util.h"
 #include "cam_trace.h"
+#include "asus_cam_sensor.h" //ASUS_BSP Zhengwei "porting sensor ATD"
 #include "cam_common_util.h"
 #include "cam_packet_util.h"
-
-
+static int g_cam0_power_up = 0;
+static int g_cam1_power_up = 0;
+static int g_cam2_power_up = 0;
+int cam_sensor_is_power_up()
+{
+	return g_cam0_power_up | g_cam1_power_up | g_cam2_power_up;
+}
 static void cam_sensor_update_req_mgr(
 	struct cam_sensor_ctrl_t *s_ctrl,
 	struct cam_packet *csl_packet)
@@ -714,7 +720,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		/* Power up and probe sensor */
 		rc = cam_sensor_power_up(s_ctrl);
 		if (rc < 0) {
-			CAM_ERR(CAM_SENSOR, "power up failed");
+			CAM_ERR(CAM_SENSOR, "power up failed sensor_id:0x%x,sensor_slave_addr:0x%x ",s_ctrl->sensordata->slave_info.sensor_id,s_ctrl->sensordata->slave_info.sensor_slave_addr);
 			goto free_power_settings;
 		}
 
@@ -743,6 +749,8 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		 */
 		s_ctrl->is_probe_succeed = 1;
 		s_ctrl->sensor_state = CAM_SENSOR_INIT;
+		//CAM_ERR(CAM_SENSOR,"ryan_dump sensor drive asus_cam_sensor_init");
+		asus_cam_sensor_init(s_ctrl);//ASUS_BSP Zhengwei "porting sensor ATD"
 	}
 		break;
 	case CAM_ACQUIRE_DEV: {
@@ -937,13 +945,9 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 
 			rc = cam_sensor_apply_settings(s_ctrl, 0,
 				CAM_SENSOR_PACKET_OPCODE_SENSOR_INITIAL_CONFIG);
-
-			s_ctrl->i2c_data.init_settings.request_id = -1;
-
 			if (rc < 0) {
 				CAM_ERR(CAM_SENSOR,
 					"cannot apply init settings");
-				delete_request(&s_ctrl->i2c_data.init_settings);
 				goto release_mutex;
 			}
 			rc = delete_request(&s_ctrl->i2c_data.init_settings);
@@ -952,20 +956,16 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 					"Fail in deleting the Init settings");
 				goto release_mutex;
 			}
+			s_ctrl->i2c_data.init_settings.request_id = -1;
 		}
 
 		if (s_ctrl->i2c_data.config_settings.is_settings_valid &&
 			(s_ctrl->i2c_data.config_settings.request_id == 0)) {
 			rc = cam_sensor_apply_settings(s_ctrl, 0,
 				CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG);
-
-			s_ctrl->i2c_data.config_settings.request_id = -1;
-
 			if (rc < 0) {
 				CAM_ERR(CAM_SENSOR,
 					"cannot apply config settings");
-				delete_request(
-					&s_ctrl->i2c_data.config_settings);
 				goto release_mutex;
 			}
 			rc = delete_request(&s_ctrl->i2c_data.config_settings);
@@ -975,6 +975,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 				goto release_mutex;
 			}
 			s_ctrl->sensor_state = CAM_SENSOR_CONFIG;
+			s_ctrl->i2c_data.config_settings.request_id = -1;
 		}
 	}
 		break;
@@ -1108,6 +1109,14 @@ int cam_sensor_power_up(struct cam_sensor_ctrl_t *s_ctrl)
 	if (rc < 0)
 		CAM_ERR(CAM_SENSOR, "cci_init failed: rc: %d", rc);
 
+	s_ctrl->power_state = 1;//ASUS_BSP Zhengwei "porting sensor ATD"
+	if (0x586 == slave_info->sensor_id) {
+		g_cam0_power_up = 1;
+	} else if (0x2442 == slave_info->sensor_id) {
+		g_cam1_power_up = 1;
+	} else if (0xd855 == slave_info->sensor_id) {
+		g_cam2_power_up = 1;
+	}
 	return rc;
 }
 
@@ -1115,6 +1124,7 @@ int cam_sensor_power_down(struct cam_sensor_ctrl_t *s_ctrl)
 {
 	struct cam_sensor_power_ctrl_t *power_info;
 	struct cam_hw_soc_info *soc_info;
+	struct cam_camera_slave_info *slave_info;
 	int rc = 0;
 
 	if (!s_ctrl) {
@@ -1124,7 +1134,7 @@ int cam_sensor_power_down(struct cam_sensor_ctrl_t *s_ctrl)
 
 	power_info = &s_ctrl->sensordata->power_info;
 	soc_info = &s_ctrl->soc_info;
-
+	slave_info = &(s_ctrl->sensordata->slave_info);
 	if (!power_info) {
 		CAM_ERR(CAM_SENSOR, "failed: power_info %pK", power_info);
 		return -EINVAL;
@@ -1146,7 +1156,14 @@ int cam_sensor_power_down(struct cam_sensor_ctrl_t *s_ctrl)
 	}
 
 	camera_io_release(&(s_ctrl->io_master_info));
-
+	s_ctrl->power_state = 0;//ASUS_BSP Zhengwei "porting sensor ATD"
+	if (0x586 == slave_info->sensor_id) {
+		g_cam0_power_up = 0;
+	} else if (0x2442 == slave_info->sensor_id) {
+		g_cam1_power_up = 0;
+	} else if (0xd855 == slave_info->sensor_id) {
+		g_cam2_power_up = 0;
+	}
 	return rc;
 }
 
