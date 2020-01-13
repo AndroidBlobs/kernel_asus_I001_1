@@ -44,6 +44,9 @@
 /* USB external connector */
 #define EXTCON_USB		1
 #define EXTCON_USB_HOST		2
+//ASUS BSP : Add for PCA +++
+#define EXTCON_USB_CC		3
+#define EXTCON_USB_SPEED	4
 
 /*
  * Charging external connector
@@ -207,6 +210,10 @@ extern int extcon_set_state(struct extcon_dev *edev, unsigned int id,
 				bool state);
 extern int extcon_set_state_sync(struct extcon_dev *edev, unsigned int id,
 				bool state);
+/* ASUS BSP Add for asus_extcon +++ */
+extern int asus_extcon_set_state_sync(struct extcon_dev *edev,
+				int cable_state);
+/* ASUS BSP Add for asus_extcon --- */
 
 /*
  * Following APIs get/set the property of each external connector.
@@ -286,6 +293,9 @@ extern const char *extcon_get_edev_name(struct extcon_dev *edev);
 
 extern int extcon_blocking_sync(struct extcon_dev *edev, unsigned int id,
 							u8 val);
+
+extern int asus_extcon_set_state_sync(struct extcon_dev *edev, int cable_state);
+
 #else /* CONFIG_EXTCON */
 static inline int extcon_dev_register(struct extcon_dev *edev)
 {
@@ -335,6 +345,11 @@ static inline int extcon_set_state_sync(struct extcon_dev *edev, unsigned int id
 {
 	return 0;
 }
+
+/* ASUS BSP Add for asus_extcon +++ */
+static inline int asus_extcon_set_state_sync(struct extcon_dev *edev,
+				int cable_state);
+/* ASUS BSP Add for asus_extcon +++ */
 
 static inline int extcon_sync(struct extcon_dev *edev, unsigned int id)
 {
