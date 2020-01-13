@@ -38,10 +38,34 @@
 #include "dp_display.h"
 #include "sde_hdcp.h"
 #include "dp_debug.h"
+#include <linux/proc_fs.h>
 
 #define DP_MST_DEBUG(fmt, ...) pr_debug(fmt, ##__VA_ARGS__)
+#define BOOT_COMP "boot_comp"
 
 static struct dp_display *g_dp_display;
+extern int dp_display_commit_cnt;
+struct completion dp_stop_comp;
+extern struct completion usb_host_complete1;
+extern volatile enum POGO_ID ASUS_POGO_ID;
+bool g_boot_comp = false;
+bool g_unplug = false;
+struct completion boot_comp;
+enum POGO_ID {
+    NO_INSERT = 0,
+    INBOX,
+    STATION,
+    DT,
+    PCIE,
+    ERROR_1,
+    OTHER,
+};
+extern bool force_hdcp1x;
+extern bool dt_hdmi;
+extern struct completion prepare_comp;
+extern uint8_t gDongleType;
+int hdcp_retry = 5;
+
 #define HPD_STRING_SIZE 30
 
 struct dp_hdcp_dev {
@@ -105,9 +129,6 @@ struct dp_display_private {
 	struct work_struct connect_work;
 	struct work_struct attention_work;
 	struct mutex session_lock;
-	bool suspended;
-	bool hdcp_delayed_off;
-	bool hdcp_abort;
 
 	u32 active_stream_cnt;
 	struct dp_mst mst;
@@ -156,6 +177,13 @@ static irqreturn_t dp_display_irq(int irq, void *dev_id)
 
 	return IRQ_HANDLED;
 }
+
+bool dp_display_is_hdmi_bridge(struct dp_panel *panel)
+{
+	return (panel->dpcd[DP_DOWNSTREAMPORT_PRESENT] &
+		0x15);
+}
+
 static bool dp_display_is_ds_bridge(struct dp_panel *panel)
 {
 	return (panel->dpcd[DP_DOWNSTREAMPORT_PRESENT] &
@@ -231,6 +259,12 @@ static void dp_display_update_hdcp_info(struct dp_display_private *dp)
 
 	if (dp->debug->hdcp_disabled || dp->debug->sim_mode)
 		return;
+
+	if (ASUS_POGO_ID == STATION || ASUS_POGO_ID == 100 || ASUS_POGO_ID == 200
+	    || ASUS_POGO_ID == DT || (force_hdcp1x && !dt_hdmi)) {
+	    pr_err("Ignore hdcp2p2");
+        i >>= 1;
+	}
 
 	while (i) {
 		dev = &dp->hdcp.dev[i];
@@ -340,33 +374,15 @@ static void dp_display_hdcp_cb_work(struct work_struct *work)
 
 	dp = container_of(dw, struct dp_display_private, hdcp_cb_work);
 
-	if (!dp->power_on || !dp->is_connected || atomic_read(&dp->aborted) ||
-			dp->hdcp_abort)
+	if (!dp->power_on || !dp->is_connected || atomic_read(&dp->aborted))
 		return;
 
-	if (dp->suspended) {
-		pr_debug("System suspending. Delay HDCP operations\n");
+	drm_dp_dpcd_readb(dp->aux->drm_aux, DP_SINK_STATUS, &sink_status);
+	sink_status &= (DP_RECEIVE_PORT_0_STATUS | DP_RECEIVE_PORT_1_STATUS);
+	if (sink_status < 1) {
+		pr_debug("Sink not synchronized. Queuing again then exiting\n");
 		queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ);
 		return;
-	}
-
-	if (dp->hdcp_delayed_off) {
-		if (dp->hdcp.ops && dp->hdcp.ops->off)
-			dp->hdcp.ops->off(dp->hdcp.data);
-		dp_display_update_hdcp_status(dp, true);
-		dp->hdcp_delayed_off = false;
-	}
-
-	if (dp->debug->hdcp_wait_sink_sync) {
-		drm_dp_dpcd_readb(dp->aux->drm_aux, DP_SINK_STATUS,
-				&sink_status);
-		sink_status &= (DP_RECEIVE_PORT_0_STATUS |
-				DP_RECEIVE_PORT_1_STATUS);
-		if (sink_status < 1) {
-			pr_debug("Sink not synchronized. Queuing again then exiting\n");
-			queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ);
-			return;
-		}
 	}
 
 	status = &dp->link->hdcp_status;
@@ -381,6 +397,7 @@ static void dp_display_hdcp_cb_work(struct work_struct *work)
 				dp_display_update_hdcp_status(dp, true);
 				return;
 			}
+			status->hdcp_state = HDCP_STATE_AUTHENTICATING;
 		} else {
 			dp_display_update_hdcp_status(dp, true);
 			return;
@@ -405,12 +422,10 @@ static void dp_display_hdcp_cb_work(struct work_struct *work)
 		ops->force_encryption(data, dp->debug->force_encryption);
 
 	switch (status->hdcp_state) {
-	case HDCP_STATE_INACTIVE:
+	case HDCP_STATE_AUTHENTICATING:
 		dp_display_hdcp_register_streams(dp);
 		if (dp->hdcp.ops && dp->hdcp.ops->authenticate)
 			rc = dp->hdcp.ops->authenticate(data);
-		if (!rc)
-			status->hdcp_state = HDCP_STATE_AUTHENTICATING;
 		break;
 	case HDCP_STATE_AUTH_FAIL:
 		if (dp_display_is_ready(dp) && dp->power_on) {
@@ -447,7 +462,10 @@ static void dp_display_notify_hdcp_status_cb(void *ptr,
 
 	dp->link->hdcp_status.hdcp_state = state;
 
-	queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ/4);
+    if (hdcp_retry > 0) {
+	    queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ/4);
+	    hdcp_retry--;
+	}
 }
 
 static void dp_display_deinitialize_hdcp(struct dp_display_private *dp)
@@ -800,7 +818,7 @@ static int dp_display_process_hpd_high(struct dp_display_private *dp)
 	 * ETIMEDOUT --> cable may have been removed
 	 * ENOTCONN --> no downstream device connected
 	 */
-	if (rc == -ETIMEDOUT || rc == -ENOTCONN) {
+	if (rc == -ETIMEDOUT || rc == -ENOTCONN || rc == -EINVAL) {
 		dp->is_connected = false;
 		goto end;
 	}
@@ -880,6 +898,9 @@ static int dp_display_process_hpd_low(struct dp_display_private *dp)
 
 	dp->panel->video_test = false;
 
+    // ASUS_BSP SZ +++ Lydia_Wu
+    dp->hpd->hpd_high = false;
+    hdcp_retry = 5;
 	return rc;
 }
 
@@ -974,7 +995,9 @@ static void dp_display_clean(struct dp_display_private *dp)
 
 	dp->power_on = false;
 
+	mutex_lock(&dp->session_lock);
 	dp->ctrl->off(dp->ctrl);
+	mutex_unlock(&dp->session_lock);
 }
 
 static int dp_display_handle_disconnect(struct dp_display_private *dp)
@@ -1035,6 +1058,14 @@ static int dp_display_usbpd_disconnect_cb(struct device *dev)
 		goto end;
 	}
 
+	/* ASUS BSP Display +++ */
+	if (!g_boot_comp) {
+		pr_err("[Display] boot up\n");
+		g_unplug = true;
+		complete_all(&boot_comp);
+	}
+	/* ASUS BSP Display --- */
+
 	mutex_lock(&dp->session_lock);
 	if (dp->debug->psm_enabled && dp->core_initialized)
 		dp->link->psm_config(dp->link, &dp->panel->link_info, true);
@@ -1046,6 +1077,7 @@ static int dp_display_usbpd_disconnect_cb(struct device *dev)
 	    && !dp->parser->gpio_aux_switch)
 		dp->aux->aux_switch(dp->aux, false, ORIENTATION_NONE);
 end:
+    complete_all(&dp_stop_comp);
 	return rc;
 }
 
@@ -1187,6 +1219,30 @@ static void dp_display_connect_work(struct work_struct *work)
 	struct dp_display_private *dp = container_of(work,
 			struct dp_display_private, connect_work);
 
+	/* ASUS BSP Display +++ */
+	if (!g_boot_comp) {
+		pr_err("[Display] boot up\n");
+		reinit_completion(&boot_comp);
+		if (!wait_for_completion_timeout(&boot_comp, HZ * 60)) {
+			pr_err("[Display] boot_comp timeout\n");
+			//return;
+		}
+
+		if (g_unplug) {
+			pr_err("[Display] unplug\n");
+			g_unplug = false;
+			return;
+		}
+	}
+	/* ASUS BSP Display --- */
+
+	if (gDongleType != 3) {
+		if (!wait_for_completion_timeout(&usb_host_complete1, HZ * 10)) {
+			pr_err("[Display] usb host timeout\n");
+			return;
+		}
+	}
+
 	if (atomic_read(&dp->aborted)) {
 		pr_warn("HPD off requested\n");
 		return;
@@ -1201,6 +1257,8 @@ static void dp_display_connect_work(struct work_struct *work)
 
 	if (!rc && dp->panel->video_test)
 		dp->link->send_test_response(dp->link);
+
+	reinit_completion(&dp_stop_comp);
 }
 
 static int dp_display_usb_notifier(struct notifier_block *nb,
@@ -1396,7 +1454,6 @@ static int dp_init_sub_modules(struct dp_display_private *dp)
 	debug_in.catalog = dp->catalog;
 	debug_in.parser = dp->parser;
 	debug_in.ctrl = dp->ctrl;
-	debug_in.power = dp->power;
 
 	dp->debug = dp_debug_get(&debug_in);
 	if (IS_ERR(dp->debug)) {
@@ -1712,6 +1769,7 @@ end:
 
 	complete_all(&dp->notification_comp);
 	mutex_unlock(&dp->session_lock);
+	complete_all(&prepare_comp);
 	return 0;
 }
 
@@ -1738,18 +1796,9 @@ static int dp_display_pre_disable(struct dp_display *dp_display, void *panel)
 		goto end;
 	}
 
-	dp->hdcp_abort = true;
-	cancel_delayed_work_sync(&dp->hdcp_cb_work);
 	if (dp_display_is_hdcp_enabled(dp) &&
 			status->hdcp_state != HDCP_STATE_INACTIVE) {
-		bool off = true;
-
-		if (dp->suspended) {
-			pr_debug("Can't perform HDCP cleanup while suspended. Defer\n");
-			dp->hdcp_delayed_off = true;
-			goto clean;
-		}
-
+		flush_delayed_work(&dp->hdcp_cb_work);
 		if (dp->mst.mst_active) {
 			dp_display_hdcp_deregister_stream(dp,
 				dp_panel->stream_id);
@@ -1757,19 +1806,18 @@ static int dp_display_pre_disable(struct dp_display *dp_display, void *panel)
 				if (i != dp_panel->stream_id &&
 						dp->active_panels[i]) {
 					pr_debug("Streams are still active. Skip disabling HDCP\n");
-					off = false;
+					goto stream;
 				}
 			}
 		}
 
-		if (off) {
-			if (dp->hdcp.ops->off)
-				dp->hdcp.ops->off(dp->hdcp.data);
-			dp_display_update_hdcp_status(dp, true);
-		}
+		if (dp->hdcp.ops->off)
+			dp->hdcp.ops->off(dp->hdcp.data);
+
+		dp_display_update_hdcp_status(dp, true);
 	}
 
-clean:
+stream:
 	if (dp_panel->audio_supported)
 		dp_panel->audio->off(dp_panel->audio);
 
@@ -1782,10 +1830,8 @@ end:
 
 static int dp_display_disable(struct dp_display *dp_display, void *panel)
 {
-	int i;
 	struct dp_display_private *dp = NULL;
 	struct dp_panel *dp_panel = NULL;
-	struct dp_link_hdcp_status *status;
 
 	if (!dp_display || !panel) {
 		pr_err("invalid input\n");
@@ -1794,7 +1840,6 @@ static int dp_display_disable(struct dp_display *dp_display, void *panel)
 
 	dp = container_of(dp_display, struct dp_display_private, dp_display);
 	dp_panel = panel;
-	status = &dp->link->hdcp_status;
 
 	mutex_lock(&dp->session_lock);
 
@@ -1805,16 +1850,6 @@ static int dp_display_disable(struct dp_display *dp_display, void *panel)
 
 	dp_display_stream_disable(dp, dp_panel);
 	dp_display_update_dsc_resources(dp, dp_panel, false);
-
-	dp->hdcp_abort = false;
-	for (i = DP_STREAM_0; i < DP_STREAM_MAX; i++) {
-		if (dp->active_panels[i]) {
-			if (status->hdcp_state != HDCP_STATE_AUTHENTICATED)
-				queue_delayed_work(dp->wq, &dp->hdcp_cb_work,
-						HZ/4);
-			break;
-		}
-	}
 end:
 	mutex_unlock(&dp->session_lock);
 	return 0;
@@ -2118,6 +2153,11 @@ static int dp_display_config_hdr(struct dp_display *dp_display, void *panel,
 
 	rc = dp_panel->setup_hdr(dp_panel, hdr);
 
+	if (dp_display_commit_cnt > 0) {
+		pr_err("fbc%ddp\n", dp_display_commit_cnt);
+		dp_display_commit_cnt--;
+	}
+
 	return rc;
 }
 
@@ -2147,6 +2187,8 @@ static int dp_display_init_aux_switch(struct dp_display_private *dp)
 	int rc = 0;
 	const char *phandle = "qcom,dp-aux-switch";
 	struct notifier_block nb;
+
+	return rc; /* ASUS BSP Display, add for DisplayPort +++ */
 
 	if (!dp->pdev->dev.of_node) {
 		pr_err("cannot find dev.of_node\n");
@@ -2495,6 +2537,52 @@ static void dp_display_wakeup_phy_layer(struct dp_display *dp_display,
 		hpd->wakeup_phy(hpd, wakeup);
 }
 
+	/* ASUS BSP Display +++ */
+static ssize_t boot_comp_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+	memset(messages, 0, sizeof(messages));
+
+	if (len > 256)
+		len = 256;
+	if (copy_from_user(messages, buff, len))
+		return -EFAULT;
+
+	pr_debug("[Display] boot completed (%s)\n", messages);
+	if (strncmp(messages, "1", 1) == 0) {
+		g_boot_comp = true;
+		complete_all(&boot_comp);
+	}
+
+	return len;
+}
+
+static ssize_t boot_comp_read(struct file *file, char __user *buf,
+					size_t count, loff_t *ppos)
+{
+	int len = 0;
+	ssize_t ret = 0;
+	char *buff;
+
+	buff = kmalloc(100, GFP_KERNEL);
+	if (!buff)
+		return -ENOMEM;
+
+	pr_debug("[Display] boot comp is %d\n", g_boot_comp);
+
+	len += sprintf(buff, "%d\n", g_boot_comp);
+	ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+	kfree(buff);
+
+	return ret;
+}
+
+static struct file_operations boot_comp_ops = {
+	.write = boot_comp_write,
+	.read = boot_comp_read,
+};
+/* ASUS BSP Display --- */
+
 static int dp_display_probe(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -2513,6 +2601,9 @@ static int dp_display_probe(struct platform_device *pdev)
 	}
 
 	init_completion(&dp->notification_comp);
+	init_completion(&dp_stop_comp);
+	init_completion(&boot_comp);
+	init_completion(&prepare_comp);
 
 	dp->pdev = pdev;
 	dp->name = "drm_dp";
@@ -2571,6 +2662,9 @@ static int dp_display_probe(struct platform_device *pdev)
 		pr_err("component add failed, rc=%d\n", rc);
 		goto error;
 	}
+
+	/* ASUS BSP Display +++ */
+	proc_create(BOOT_COMP, 0664, NULL, &boot_comp_ops);
 
 	return 0;
 error:
@@ -2645,24 +2739,14 @@ static int dp_display_remove(struct platform_device *pdev)
 
 static int dp_pm_prepare(struct device *dev)
 {
-	struct dp_display_private *dp = container_of(g_dp_display,
-			struct dp_display_private, dp_display);
-
 	dp_display_set_mst_state(g_dp_display, PM_SUSPEND);
-
-	dp->suspended = true;
 
 	return 0;
 }
 
 static void dp_pm_complete(struct device *dev)
 {
-	struct dp_display_private *dp = container_of(g_dp_display,
-			struct dp_display_private, dp_display);
-
 	dp_display_set_mst_state(g_dp_display, PM_DEFAULT);
-
-	dp->suspended = false;
 }
 
 static const struct dev_pm_ops dp_pm_ops = {

@@ -521,7 +521,10 @@ static int dp_audio_ack_done(struct platform_device *pdev, u32 ack)
 
 	if (!audio->engine_on) {
 		atomic_set(&audio->acked, 1);
-		complete_all(&audio->hpd_comp);
+        if (&audio->hpd_comp != NULL) {
+            complete_all(&audio->hpd_comp);
+        } else
+            pr_err("[Display] hpd comp is NULL.\n");
 	}
 end:
 	return rc;

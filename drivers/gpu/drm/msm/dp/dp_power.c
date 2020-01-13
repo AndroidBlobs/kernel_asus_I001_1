@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -123,7 +123,7 @@ static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 
 	parser = power->parser;
 
-	if (IS_ERR_OR_NULL(parser->pinctrl.pin) || power->dp_power.sim_mode)
+	if (IS_ERR_OR_NULL(parser->pinctrl.pin))
 		return 0;
 
 	if (parser->no_aux_switch && parser->lphw_hpd) {
@@ -421,10 +421,15 @@ static void dp_power_set_gpio(struct dp_power_private *power, bool flip)
 			pr_debug("gpio %s, value %d\n", config->gpio_name,
 				config->value);
 
+            // BSP SZ Lydia_Wu re-add for not controlled by ec_hid
 			if (dp_power_find_gpio(config->gpio_name, "aux-en") ||
 			    dp_power_find_gpio(config->gpio_name, "aux-sel"))
 				gpio_direction_output(config->gpio,
 					config->value);
+			/* ASUS BSP Display +++ */
+			else if (dp_power_find_gpio(config->gpio_name, "aux-i2c"))
+				gpio_direction_output(config->gpio, 0);
+			/* ASUS BSP Display --- */
 			else
 				gpio_set_value(config->gpio, config->value);
 

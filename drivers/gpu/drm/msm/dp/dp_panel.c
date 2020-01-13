@@ -101,6 +101,40 @@ static const struct dp_panel_info fail_safe = {
 	.bpp = 24,
 };
 
+// ASUS BSP Display, add for station mode +++
+static const struct dp_panel_info station_edid = {
+	.h_active = 1080,
+	.v_active = 2160,
+	.h_back_porch = 32,
+	.h_front_porch = 26,
+	.h_sync_width = 2,
+	.h_active_low = 0,
+	.v_back_porch = 4,
+	.v_front_porch = 8,
+	.v_sync_width = 4,
+	.v_active_low = 0,
+	.h_skew = 0,
+	.refresh_rate = 60,
+	.pixel_clk_khz = 148400,
+	.bpp = 24,
+};
+// ASUS BSP Display, add for station mode ---
+
+/* ASUS BSP Display +++ */
+extern bool edid_default;
+extern volatile enum POGO_ID ASUS_POGO_ID;
+enum POGO_ID {
+    NO_INSERT = 0,
+    INBOX,
+    STATION,
+    DT,
+    PCIE,
+    ERROR_1,
+    OTHER,
+};
+extern bool dp_display_is_hdmi_bridge(struct dp_panel *panel);
+bool dt_hdmi = false;
+
 /* OEM NAME */
 static const u8 vendor_name[8] = {81, 117, 97, 108, 99, 111, 109, 109};
 
@@ -1579,6 +1613,7 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel, bool multi_func)
 	u8 *dpcd, rx_feature, temp;
 	u32 dfp_count = 0, offset = DP_DPCD_REV;
 	unsigned long caps = DP_LINK_CAP_ENHANCED_FRAMING;
+    int timeout = 10;
 
 	if (!dp_panel) {
 		pr_err("invalid input\n");
@@ -1602,7 +1637,17 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel, bool multi_func)
 		goto skip_dpcd_read;
 	}
 
-	rlen = drm_dp_dpcd_read(drm_aux, DP_TRAINING_AUX_RD_INTERVAL, &temp, 1);
+    while (timeout) {
+	    rlen = drm_dp_dpcd_read(drm_aux, DP_TRAINING_AUX_RD_INTERVAL, &temp, 1);
+
+	    if (rlen == 1) {
+	        break;
+	    }
+        pr_err("error reading DP_TRAINING_AUX_RD_INTERVAL, retry\n");
+        msleep(20);
+	    timeout--;
+	}
+
 	if (rlen != 1) {
 		pr_err("error reading DP_TRAINING_AUX_RD_INTERVAL\n");
 		rc = -EINVAL;
@@ -1779,8 +1824,9 @@ static int dp_panel_read_edid(struct dp_panel *dp_panel,
 		goto end;
 	}
 
-	sde_get_edid(connector, &panel->aux->drm_aux->ddc,
-		(void **)&dp_panel->edid_ctrl);
+    sde_get_edid(connector, &panel->aux->drm_aux->ddc,
+        (void **)&dp_panel->edid_ctrl);
+
 	if (!dp_panel->edid_ctrl->edid) {
 		pr_err("EDID read failed\n");
 		ret = -EINVAL;
@@ -1936,7 +1982,13 @@ static u32 dp_panel_get_supported_bpp(struct dp_panel *dp_panel,
 	const u32 max_supported_bpp = 30, min_supported_bpp = 18;
 	u32 bpp = 0, data_rate_khz = 0;
 
-	bpp = min_t(u32, mode_edid_bpp, max_supported_bpp);
+    /* ASUS BSP Display +++ */
+    dt_hdmi = dp_display_is_hdmi_bridge(dp_panel);
+    if (ASUS_POGO_ID == DT && dt_hdmi) {
+        bpp = min_t(u32, mode_edid_bpp, DP_PANEL_DEFAULT_BPP);
+    } else
+        bpp = min_t(u32, mode_edid_bpp, max_supported_bpp);
+    /* ASUS BSP Display --- */
 
 	link_info = &dp_panel->link_info;
 	data_rate_khz = link_info->num_lanes * link_info->rate * 8;
@@ -2030,17 +2082,24 @@ static int dp_panel_get_modes(struct dp_panel *dp_panel,
 
 	panel = container_of(dp_panel, struct dp_panel_private, dp_panel);
 
-	if (dp_panel->video_test) {
-		dp_panel_set_test_mode(panel, mode);
+	if (ASUS_POGO_ID == STATION && edid_default) {
+		pr_err("[Display] use specific edid for station mode\n");
+		memcpy(&mode->timing, &station_edid,
+			sizeof(station_edid));
 		return 1;
-	} else if (dp_panel->edid_ctrl->edid) {
-		return _sde_edid_update_modes(connector, dp_panel->edid_ctrl);
-	}
+	} else {
+        if (dp_panel->video_test) {
+            dp_panel_set_test_mode(panel, mode);
+            return 1;
+        } else if (dp_panel->edid_ctrl->edid) {
+            return _sde_edid_update_modes(connector, dp_panel->edid_ctrl);
+        }
 
-	/* fail-safe mode */
-	memcpy(&mode->timing, &fail_safe,
-		sizeof(fail_safe));
-	return 1;
+        /* fail-safe mode */
+        memcpy(&mode->timing, &fail_safe,
+            sizeof(fail_safe));
+        return 1;
+    }
 }
 
 static void dp_panel_handle_sink_request(struct dp_panel *dp_panel)
